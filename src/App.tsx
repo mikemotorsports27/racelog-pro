@@ -94,6 +94,7 @@ type SharedAppState = {
 };
 
 const SHARED_STATE_ID = 'default';
+const LOGO_MAX_DIMENSION = 320;
 
 function formatDisplayDate(value?: string) {
   if (!value) return '--';
@@ -104,6 +105,42 @@ function formatDisplayDate(value?: string) {
     day: 'numeric',
     year: 'numeric'
   });
+}
+
+function loadImageFromFile(file: File): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const objectUrl = URL.createObjectURL(file);
+
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('Unable to read logo image.'));
+    };
+    image.src = objectUrl;
+  });
+}
+
+async function resizeLogoFile(file: File): Promise<string> {
+  const image = await loadImageFromFile(file);
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  const scale = Math.min(1, LOGO_MAX_DIMENSION / Math.max(width, height));
+  const canvas = document.createElement('canvas');
+
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Unable to process logo image.');
+
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+  return canvas.toDataURL('image/png');
 }
 
 export default function App() {
@@ -1675,13 +1712,18 @@ function SettingsView({
     onSettingsChange({ ...settings, [key]: value });
   };
 
-  const handleLogoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLogoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => updateSetting('logoDataUrl', String(reader.result || ''));
-    reader.readAsDataURL(file);
-    event.target.value = '';
+    try {
+      const logoDataUrl = await resizeLogoFile(file);
+      updateSetting('logoDataUrl', logoDataUrl);
+    } catch (error) {
+      console.error('Logo upload failed:', error);
+      alert('Could not process that logo. Try a PNG or JPG image under 5 MB.');
+    } finally {
+      event.target.value = '';
+    }
   };
 
   const resetCustomization = () => onSettingsChange(DEFAULT_APP_SETTINGS);
@@ -1695,7 +1737,7 @@ function SettingsView({
     >
       <header>
         <h2 className="text-4xl font-black italic tracking-tighter uppercase">Configuration</h2>
-        <p className="text-zinc-500 font-medium tracking-wide">Customize the app shell and manage local data.</p>
+        <p className="text-zinc-500 font-medium tracking-wide">Customize the app shell and manage synced data.</p>
       </header>
 
       <div className="flex border-b border-zinc-800 overflow-x-auto no-scrollbar">
@@ -1752,6 +1794,9 @@ function SettingsView({
                 <Upload size={16} /> Upload Logo
                 <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
               </label>
+              <p className="text-[10px] leading-relaxed text-zinc-500 uppercase tracking-wider">
+                Logos are resized before syncing so every device receives the same header image.
+              </p>
               {settings.logoDataUrl && (
                 <button onClick={() => updateSetting('logoDataUrl', '')} className="min-h-11 w-full border border-zinc-800 text-zinc-400 hover:text-white px-4 py-3 text-xs font-bold uppercase tracking-widest">
                   Remove Logo
