@@ -1,0 +1,83 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --color-racing-red: #DE0000;
+  --color-racing-blue-light: #3CB6E3;
+  --color-racing-blue-dark: #0038A8;
+  --color-racing-black-bg: #0A0A0A;
+  --color-racing-panel: #111111;
+  --color-racing-header: #0F0F0F;
+  --color-racing-accent: #1A1A1A;
+}
+
+@layer base {
+  body {
+    @apply bg-racing-black-bg text-zinc-100;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+@utility custom-scrollbar {
+  &::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: #333;
+    border-radius: 0px;
+  }
+  &::-webkit-scrollbar-thumb:hover {
+    background: var(--color-racing-red);
+  }
+}
+
+@utility no-scrollbar {
+  &::-webkit-scrollbar {
+    display: none;
+  }
+  scrollbar-width: none;
+}
+
+@media (min-width: 768px) and (max-width: 1180px) {
+  .ipad-compact h2 {
+    font-size: 1.75rem;
+    line-height: 1.95rem;
+  }
+
+  .ipad-compact h3 {
+    font-size: 0.95rem;
+  }
+
+  .ipad-compact input,
+  .ipad-compact select,
+  .ipad-compact textarea {
+    padding-top: 0.55rem;
+    padding-bottom: 0.55rem;
+  }
+
+  .ipad-compact .compact-card {
+    padding: 1rem;
+  }
+
+  .ipad-compact .compact-panel {
+    padding: 1rem;
+  }
+
+  .ipad-compact .compact-gap {
+    gap: 1rem;
+  }
+
+  .ipad-compact .compact-row {
+    gap: 0.75rem;
+  }
+
+  .ipad-compact footer {
+    display: none;
+  }
+}

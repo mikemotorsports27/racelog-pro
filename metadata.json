@@ -1,0 +1,6 @@
+{
+  "name": "RaceLog Pro",
+  "description": "A motorsport stint logger for tracking motorcycle setup adjustments, lap times, and rider feedback.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
