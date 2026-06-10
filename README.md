@@ -43,4 +43,14 @@ VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 ```
 
-The client is prepared in `src/lib/supabase.ts`. Current app data still uses local browser storage until the database schema and sync flow are added.
+Create the shared app-state table before testing sync:
+
+1. Open your Supabase project.
+2. Go to `SQL Editor`.
+3. Open `supabase/schema.sql` from this repo.
+4. Paste the full SQL into Supabase.
+5. Click `Run`.
+
+The app syncs one shared row named `default` in `public.app_state`. Legs, stints, active race weekend, app colors, and uploaded logo are stored in that shared state, with local browser storage kept only as an offline fallback.
+
+After changing Vercel environment variables or pushing sync changes, redeploy the latest Vercel deployment.

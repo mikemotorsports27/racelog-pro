@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import type React from 'react';
 import { 
   LayoutDashboard, 
@@ -55,6 +55,7 @@ import {
   timeToMs, 
 } from './lib/data';
 import { cn } from './lib/utils';
+import { isSupabaseConfigured, supabase } from './lib/supabase';
 
 // --- Constants ---
 const FEEDBACK_TAGS = [
@@ -84,6 +85,16 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
 
 type View = 'dashboard' | 'logbook' | 'add' | 'details' | 'compare' | 'settings';
 
+type SharedAppState = {
+  schemaVersion: 1;
+  runs: Run[];
+  legs: RaceLeg[];
+  activeLegId: string | null;
+  appSettings: AppSettings;
+};
+
+const SHARED_STATE_ID = 'default';
+
 function formatDisplayDate(value?: string) {
   if (!value) return '--';
   const [year, month, day] = value.split('-').map(Number);
@@ -106,6 +117,11 @@ export default function App() {
   const [editingLeg, setEditingLeg] = useState<RaceLeg | null>(null);
   const [isLegModalOpen, setIsLegModalOpen] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<'local' | 'syncing' | 'synced' | 'error'>(
+    isSupabaseConfigured ? 'syncing' : 'local'
+  );
+  const applyingRemoteState = useRef(false);
+  const lastRemoteUpdate = useRef<string | null>(null);
   const [appSettings, setAppSettings] = useState<AppSettings>(() => {
     try {
       return { ...DEFAULT_APP_SETTINGS, ...JSON.parse(localStorage.getItem('app_settings') || '{}') };
@@ -114,8 +130,7 @@ export default function App() {
     }
   });
 
-  // Load runs on mount
-  useEffect(() => {
+  const buildLocalState = (): SharedAppState => {
     const storedRuns = getStorageRuns();
     let storedLegs = getStorageLegs();
 
@@ -128,36 +143,163 @@ export default function App() {
       ? storedRuns.map(run => run.legId ? run : { ...run, legId: fallbackLeg.id })
       : storedRuns;
 
-    setLegs(storedLegs);
-    setRuns(migratedRuns);
-    setActiveLegId(localStorage.getItem('activeLegId') || fallbackLeg?.id || null);
+    return {
+      schemaVersion: 1,
+      runs: migratedRuns,
+      legs: storedLegs,
+      activeLegId: localStorage.getItem('activeLegId') || fallbackLeg?.id || null,
+      appSettings,
+    };
+  };
+
+  const applySharedState = (state: Partial<SharedAppState>) => {
+    applyingRemoteState.current = true;
+    const nextLegs = Array.isArray(state.legs) ? state.legs : [];
+    const nextRuns = Array.isArray(state.runs)
+      ? state.runs.map(run => ({ ...run, weight: run.weight || '' }))
+      : [];
+    const fallbackLeg = nextLegs[0];
+
+    setLegs(nextLegs);
+    setRuns(nextRuns);
+    setActiveLegId(state.activeLegId || fallbackLeg?.id || null);
+    setAppSettings({ ...DEFAULT_APP_SETTINGS, ...(state.appSettings || {}) });
+    window.setTimeout(() => {
+      applyingRemoteState.current = false;
+    }, 0);
+  };
+
+  const persistLocalState = (state: SharedAppState) => {
+    saveStorageRuns(state.runs);
+    saveStorageLegs(state.legs);
+    if (state.activeLegId) localStorage.setItem('activeLegId', state.activeLegId);
+    localStorage.setItem('app_settings', JSON.stringify(state.appSettings));
+  };
+
+  // Load local data immediately, then replace it with shared Supabase data when available.
+  useEffect(() => {
+    const localState = buildLocalState();
+    applySharedState(localState);
     setIsLoaded(true);
+    persistLocalState(localState);
+
+    const loadRemoteState = async () => {
+      if (!supabase) return;
+
+      try {
+        setSyncStatus('syncing');
+        const { data, error } = await supabase
+          .from('app_state')
+          .select('state, updated_at')
+          .eq('id', SHARED_STATE_ID)
+          .maybeSingle();
+
+        if (error) throw error;
+
+        if (data?.state) {
+          lastRemoteUpdate.current = data.updated_at;
+          applySharedState(data.state as SharedAppState);
+          persistLocalState(data.state as SharedAppState);
+        } else {
+          const { error: seedError } = await supabase
+            .from('app_state')
+            .upsert({
+              id: SHARED_STATE_ID,
+              state: localState,
+              updated_at: new Date().toISOString(),
+            });
+          if (seedError) throw seedError;
+        }
+
+        setSyncStatus('synced');
+      } catch (error) {
+        console.error('Supabase sync load failed:', error);
+        setSyncStatus('error');
+      }
+    };
+
+    loadRemoteState();
   }, []);
 
-  // Save runs when they change
+  const sharedState = useMemo<SharedAppState>(() => ({
+    schemaVersion: 1,
+    runs,
+    legs,
+    activeLegId,
+    appSettings,
+  }), [runs, legs, activeLegId, appSettings]);
+
+  // Save locally and to Supabase when app state changes.
   useEffect(() => {
     if (!isLoaded) return;
-    saveStorageRuns(runs);
-  }, [runs, isLoaded]);
+    if (applyingRemoteState.current) return;
 
-  useEffect(() => {
-    if (!isLoaded) return;
-    saveStorageLegs(legs);
-  }, [legs, isLoaded]);
+    persistLocalState(sharedState);
 
-  useEffect(() => {
-    if (activeLegId) {
-      localStorage.setItem('activeLegId', activeLegId);
+    if (!supabase) {
+      setSyncStatus('local');
+      return;
     }
-  }, [activeLegId]);
+
+    const timeout = window.setTimeout(async () => {
+      try {
+        setSyncStatus('syncing');
+        const { data, error } = await supabase
+          .from('app_state')
+          .upsert({
+            id: SHARED_STATE_ID,
+            state: sharedState,
+            updated_at: new Date().toISOString(),
+          })
+          .select('updated_at')
+          .single();
+
+        if (error) throw error;
+        lastRemoteUpdate.current = data.updated_at;
+        setSyncStatus('synced');
+      } catch (error) {
+        console.error('Supabase sync save failed:', error);
+        setSyncStatus('error');
+      }
+    }, 600);
+
+    return () => window.clearTimeout(timeout);
+  }, [sharedState, isLoaded]);
 
   useEffect(() => {
     const root = document.documentElement;
     root.style.setProperty('--color-racing-blue-light', appSettings.primaryColor);
     root.style.setProperty('--color-racing-blue-dark', appSettings.secondaryColor);
     root.style.setProperty('--color-racing-red', appSettings.dangerColor);
-    localStorage.setItem('app_settings', JSON.stringify(appSettings));
   }, [appSettings]);
+
+  useEffect(() => {
+    if (!supabase) return;
+
+    const channel = supabase
+      .channel('shared-app-state')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'app_state', filter: `id=eq.${SHARED_STATE_ID}` },
+        (payload) => {
+          const updatedAt = (payload.new as { updated_at?: string } | null)?.updated_at || null;
+          if (!updatedAt || updatedAt === lastRemoteUpdate.current) return;
+
+          const state = (payload.new as { state?: SharedAppState } | null)?.state;
+          if (!state) return;
+
+          lastRemoteUpdate.current = updatedAt;
+          applySharedState(state);
+          persistLocalState(state);
+          setSyncStatus('synced');
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   useEffect(() => {
     setCompareIds([]);
@@ -260,6 +402,43 @@ export default function App() {
     });
   };
 
+  const clearSharedData = async () => {
+    if (!confirm('Wipe everything on all synced devices? This cannot be undone.')) return;
+
+    const resetState: SharedAppState = {
+      schemaVersion: 1,
+      runs: [],
+      legs: [],
+      activeLegId: null,
+      appSettings: DEFAULT_APP_SETTINGS,
+    };
+
+    applySharedState(resetState);
+    localStorage.clear();
+
+    if (supabase) {
+      try {
+        setSyncStatus('syncing');
+        const { data, error } = await supabase
+          .from('app_state')
+          .upsert({
+            id: SHARED_STATE_ID,
+            state: resetState,
+            updated_at: new Date().toISOString(),
+          })
+          .select('updated_at')
+          .single();
+
+        if (error) throw error;
+        lastRemoteUpdate.current = data.updated_at;
+        setSyncStatus('synced');
+      } catch (error) {
+        console.error('Supabase sync clear failed:', error);
+        setSyncStatus('error');
+      }
+    }
+  };
+
   // --- Components ---
 
   const SidebarItem = ({ icon: Icon, label, view, active }: { icon: any, label: string, view: View, active: boolean }) => (
@@ -305,6 +484,19 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-2 lg:gap-3">
+          <div className="hidden md:flex flex-col items-end">
+            <span className="text-[10px] uppercase text-gray-500 font-bold">Sync</span>
+            <span className={cn(
+              "text-[10px] font-black uppercase tracking-widest",
+              syncStatus === 'synced' && "text-emerald-500",
+              syncStatus === 'syncing' && "text-racing-blue-light",
+              syncStatus === 'local' && "text-amber-500",
+              syncStatus === 'error' && "text-racing-red"
+            )}>
+              {syncStatus}
+            </span>
+          </div>
+          <div className="hidden md:block h-6 w-[1px] bg-white/10 mx-1"></div>
           <div className="hidden sm:flex flex-col items-end">
             <span className="text-[10px] uppercase text-gray-500 font-bold">PB Time</span>
             <span className="text-sm font-mono font-bold text-racing-blue-light">{fastestRun?.bestLapTime || '--:--.---'}</span>
@@ -393,7 +585,7 @@ export default function App() {
               />
             )}
             {currentView === 'settings' && (
-              <SettingsView settings={appSettings} onSettingsChange={setAppSettings} />
+              <SettingsView settings={appSettings} onSettingsChange={setAppSettings} onClearData={clearSharedData} />
             )}
           </AnimatePresence>
         </div>
@@ -1468,7 +1660,15 @@ function CompareView({ runs, allRuns, onAddRun, onRemoveRun }: { runs: Run[], al
   );
 }
 
-function SettingsView({ settings, onSettingsChange }: { settings: AppSettings, onSettingsChange: (settings: AppSettings) => void }) {
+function SettingsView({
+  settings,
+  onSettingsChange,
+  onClearData,
+}: {
+  settings: AppSettings,
+  onSettingsChange: (settings: AppSettings) => void,
+  onClearData: () => void,
+}) {
   const [activeTab, setActiveTab] = useState<'customization' | 'data'>('customization');
 
   const updateSetting = (key: keyof AppSettings, value: string) => {
@@ -1570,13 +1770,13 @@ function SettingsView({ settings, onSettingsChange }: { settings: AppSettings, o
               <AlertTriangle size={16} className="text-racing-red" /> Danger Zone
             </h3>
             <div>
-              <h4 className="font-bold text-white mb-1">Clear Local Archive</h4>
-              <p className="text-xs text-zinc-500 mb-4">Permanently delete all stored stints from this browser's local storage.</p>
+              <h4 className="font-bold text-white mb-1">Clear Synced Archive</h4>
+              <p className="text-xs text-zinc-500 mb-4">Permanently delete all synced stints and app settings from every connected device.</p>
               <button 
-                onClick={() => { if(confirm('Wipe everything?')) { localStorage.clear(); window.location.reload(); } }}
+                onClick={onClearData}
                 className="flex items-center gap-2 text-racing-red border border-racing-red/30 bg-racing-red/5 hover:bg-racing-red hover:text-white px-6 py-3 rounded-none text-xs font-bold uppercase tracking-widest transition-all"
               >
-                <Trash2 size={18} /> Wipe Logbook
+                <Trash2 size={18} /> Wipe Synced Logbook
               </button>
             </div>
           </section>

@@ -21,6 +21,7 @@ export default defineConfig(() => {
           manualChunks: {
             charts: ['recharts'],
             motion: ['motion'],
+            supabase: ['@supabase/supabase-js'],
           },
         },
       },
