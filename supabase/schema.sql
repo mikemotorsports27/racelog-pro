@@ -30,19 +30,19 @@ drop policy if exists "Allow public update app state" on public.app_state;
 create policy "Allow public read app state"
 on public.app_state
 for select
-to anon
+to anon, authenticated
 using (true);
 
 create policy "Allow public insert app state"
 on public.app_state
 for insert
-to anon
+to anon, authenticated
 with check (true);
 
 create policy "Allow public update app state"
 on public.app_state
 for update
-to anon
+to anon, authenticated
 using (true)
 with check (true);
 

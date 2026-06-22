@@ -95,6 +95,7 @@ type SharedAppState = {
 
 const SHARED_STATE_ID = 'default';
 const LOGO_MAX_DIMENSION = 320;
+const LOGO_MAX_DATA_URL_LENGTH = 450_000;
 
 function formatDisplayDate(value?: string) {
   if (!value) return '--';
@@ -105,6 +106,25 @@ function formatDisplayDate(value?: string) {
     day: 'numeric',
     year: 'numeric'
   });
+}
+
+function describeSyncError(error: unknown) {
+  if (error instanceof Error) return error.message;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function normalizeAppSettings(settings?: Partial<AppSettings>): AppSettings {
+  const nextSettings = { ...DEFAULT_APP_SETTINGS, ...(settings || {}) };
+  const logoDataUrl = typeof nextSettings.logoDataUrl === 'string' ? nextSettings.logoDataUrl : '';
+
+  return {
+    ...nextSettings,
+    logoDataUrl: logoDataUrl.length <= LOGO_MAX_DATA_URL_LENGTH ? logoDataUrl : '',
+  };
 }
 
 function loadImageFromFile(file: File): Promise<HTMLImageElement> {
@@ -161,7 +181,7 @@ export default function App() {
   const lastRemoteUpdate = useRef<string | null>(null);
   const [appSettings, setAppSettings] = useState<AppSettings>(() => {
     try {
-      return { ...DEFAULT_APP_SETTINGS, ...JSON.parse(localStorage.getItem('app_settings') || '{}') };
+      return normalizeAppSettings(JSON.parse(localStorage.getItem('app_settings') || '{}'));
     } catch {
       return DEFAULT_APP_SETTINGS;
     }
@@ -185,7 +205,7 @@ export default function App() {
       runs: migratedRuns,
       legs: storedLegs,
       activeLegId: localStorage.getItem('activeLegId') || fallbackLeg?.id || null,
-      appSettings,
+      appSettings: normalizeAppSettings(appSettings),
     };
   };
 
@@ -200,7 +220,7 @@ export default function App() {
     setLegs(nextLegs);
     setRuns(nextRuns);
     setActiveLegId(state.activeLegId || fallbackLeg?.id || null);
-    setAppSettings({ ...DEFAULT_APP_SETTINGS, ...(state.appSettings || {}) });
+    setAppSettings(normalizeAppSettings(state.appSettings));
     window.setTimeout(() => {
       applyingRemoteState.current = false;
     }, 0);
@@ -209,8 +229,12 @@ export default function App() {
   const persistLocalState = (state: SharedAppState) => {
     saveStorageRuns(state.runs);
     saveStorageLegs(state.legs);
-    if (state.activeLegId) localStorage.setItem('activeLegId', state.activeLegId);
-    localStorage.setItem('app_settings', JSON.stringify(state.appSettings));
+    if (state.activeLegId) {
+      localStorage.setItem('activeLegId', state.activeLegId);
+    } else {
+      localStorage.removeItem('activeLegId');
+    }
+    localStorage.setItem('app_settings', JSON.stringify(normalizeAppSettings(state.appSettings)));
   };
 
   // Load local data immediately, then replace it with shared Supabase data when available.
@@ -250,7 +274,7 @@ export default function App() {
 
         setSyncStatus('synced');
       } catch (error) {
-        console.error('Supabase sync load failed:', error);
+        console.error(`Supabase sync load failed: ${describeSyncError(error)}`, error);
         setSyncStatus('error');
       }
     };
@@ -263,7 +287,7 @@ export default function App() {
     runs,
     legs,
     activeLegId,
-    appSettings,
+    appSettings: normalizeAppSettings(appSettings),
   }), [runs, legs, activeLegId, appSettings]);
 
   // Save locally and to Supabase when app state changes.
@@ -295,7 +319,7 @@ export default function App() {
         lastRemoteUpdate.current = data.updated_at;
         setSyncStatus('synced');
       } catch (error) {
-        console.error('Supabase sync save failed:', error);
+        console.error(`Supabase sync save failed: ${describeSyncError(error)}`, error);
         setSyncStatus('error');
       }
     }, 600);
@@ -470,7 +494,7 @@ export default function App() {
         lastRemoteUpdate.current = data.updated_at;
         setSyncStatus('synced');
       } catch (error) {
-        console.error('Supabase sync clear failed:', error);
+        console.error(`Supabase sync clear failed: ${describeSyncError(error)}`, error);
         setSyncStatus('error');
       }
     }
